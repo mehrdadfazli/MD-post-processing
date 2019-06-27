@@ -46,21 +46,14 @@ def readdata(file_list,idx):
            
        """
     myfile = pd.read_table(file_list[idx],skiprows=9,delimiter=' ',header=None)
+#    myfile.columns = ["atom_id", "type", "x", "y", "z", "vx", "vy", "vz", \
+#                      "ke","pe", "s1", "s2", "s3", "s4", "s5", "s6","space"]
     myfile.columns = ["atom_id", "type", "x", "y", "z", "vx", "vy", "vz", \
-                      "ke","pe", "s1", "s2", "s3", "s4", "s5", "s6","space"]
+                      "ke","pe","space"]
+
     myfile = myfile.drop(columns='space')
     system = myfile.sort_values(by=['atom_id']) #Sorting the system based on the atom id
     return(system)
-
-def num_den(system,k):
-    """This function computes the number density (being the summation of 
-    exp(ik.r) over all atoms) at a given time"""
-    rho = 0*1j
-    for p in range(0,len(system)):
-        rho += np.exp((k[i,0]*system["x"][p]+ \
-                       k[i,1]*system["y"][p]+ \
-                       k[i,2]*system["z"][p])*1j) #k is the matrix of k points
-    return(rho)
 
 def PDOS(vel, m=None, dt=1):
     """This function gets the velocities and mass and the recording frequency 
@@ -101,8 +94,36 @@ def PDOS(vel, m=None, dt=1):
    
     return(f, pdos)
 
+def St_Fct(trj, k, dt=1):
+    """This function computes the number density (being the summation of 
+    exp(ik.r) over all atoms) at a given time"""
+    rho = 0*1j
+    for p in range(0,len(system)):
+        rho += np.exp((k[i,0]*system["x"][p]+ \
+                       k[i,1]*system["y"][p]+ \
+                       k[i,2]*system["z"][p])*1j) #k is the matrix of k points
+    
+    rho = np.zeros([n_KP,n_Snp])*1j
+    
+    for p in range(n_KP):
+        k_rep = np.tile(k[p,:],(n_atoms,1))
+        for j in range(n_Snp):
+            exponent = np.sum(np.multiply(k_rep,trj[:,j,:]),axis=1)*1j
+            
+            rho[p,j] = np.sum(np.exp(exponent))
+    
+    St_Fct = np.abs(fft(rho, axis = time_axis))**2.0
+    full_faxis = np.fft.fftfreq(rho.shape[time_axis], dt)
+    split_id = rho.shape[time_axis] // 2
+    
+    St_Fct = St_Fct[:split_id]
+    f = full_faxis[:split_id]
 
-def Str_Factor_vel(trj, vel, k, m, dt=1):
+    return(f,St_Fct)
+
+
+
+def St_Fct_vel(trj, vel, k, m=None, dt=1):
     """This function gets the trajectories and k points and the recording 
        frequency, then computes the dynamical structure factor
        
@@ -116,15 +137,28 @@ def Str_Factor_vel(trj, vel, k, m, dt=1):
             sf: dynamical structure factor as a function of frequency and k
        
        """
+       
+    if m is None:
+        m = np.ones([n_atoms])
+        
     assert trj.shape[xyz_axis] == k.shape[1] == vel.shape[xyz_axis]
+    
     V_kt = np.zeros([n_KP, n_Snp, 3])*1j
     for p in range(n_KP):
+        k_rep = np.tile(k[p,:],(n_atoms,1))
+        print(k_rep)
         for j in range(n_Snp):
             print(p,j)
-            for i in range(n_atoms):
-                #trj(i,0,:) is the equilibrium R_i
-                V_kt[p,j,:] += np.sqrt(m[i])*vel[i,j,:]*np.exp(dot(k[p,:],trj[i,0,:])*1j) 
-    
+            exponent = np.exp(np.sum(np.multiply(k_rep,trj[:,0,:]),axis=1)*1j)
+            
+            V_kt[p,j,0] = np.sum(np.multiply(np.multiply(np.sqrt(m[:]),vel[:,j,0]),exponent))
+            V_kt[p,j,1] = np.sum(np.multiply(np.multiply(np.sqrt(m[:]),vel[:,j,1]),exponent))
+            V_kt[p,j,2] = np.sum(np.multiply(np.multiply(np.sqrt(m[:]),vel[:,j,2]),exponent))
+            
+#            for i in range(n_atoms):
+#                #trj(i,0,:) is the equilibrium R_i
+#                V_kt[p,j,:] += np.sqrt(m[i])*vel[i,j,:]*np.exp(np.multiply(k[p,:],trj[i,0,:])*1j) 
+#   
     fft_vel = np.abs(fft(V_kt, axis = time_axis))**2.0
     full_faxis = np.fft.fftfreq(V_kt.shape[time_axis], dt)
     split_id = V_kt.shape[time_axis] // 2
@@ -137,82 +171,58 @@ def Str_Factor_vel(trj, vel, k, m, dt=1):
     
     return(f,sf_vel)
 
-def SF(num_den):
-    """This function computes the structure factor from number density"""
-    num_den_w = np.fft.fft(rho,axis=time_axis)
-    StFct = np.power(np.abs(num_den_w),2)
-    return(StFct)
+#def SF(num_den):
+#    """This function computes the structure factor from number density"""
+#    num_den_w = np.fft.fft(rho,axis=time_axis)
+#    StFct = np.power(np.abs(num_den_w),2)
+#    return(StFct)
     
 
-def Str_Factor(trj, k, dt=1):
-    """This function gets the trajectories and k points and the recording 
-       frequency, then computes the dynamical structure factor
-       
-       Input:
-           trj: a 3D numpy array [#atoms, #snapshots, 3]
-           dt : period of the recording of the velocities (s)
-           k  : k points matrix. A 2D array [#k points, 3]
-       
-        Output:
-            f : the frequency array
-            sf: dynamical structure factor as a function of frequency and k
-       
-       """
-    assert trj.shape[xyz_axis] == k.shape[1]
-    rho = np.zeros([n_KP,n_Snp])
-    for p in range(k.shape[0]):
-        for j in range(trj.shape[time_axis]):
-            print(p,j)
-            for i in range(trj.shape[id_axis]):
-                rho[p,j] += np.exp(sum(k[p,:]*trj[i,j,:])*1j)
-    
-    fft_rho = np.abs(fft(rho, axis = time_axis))**2.0
-    full_faxis = np.fft.fftfreq(rho.shape[time_axis], dt)
-    split_id = trj.shape[time_axis] // 2
-    
-    sf = fft_rho[:split_id]
-    f = full_faxis[:split_id]
-    
-    return(f,sf)
+#def Str_Factor(trj, k, dt=1):
+#    """This function gets the trajectories and k points and the recording 
+#       frequency, then computes the dynamical structure factor
+#       
+#       Input:
+#           trj: a 3D numpy array [#atoms, #snapshots, 3]
+#           dt : period of the recording of the velocities (s)
+#           k  : k points matrix. A 2D array [#k points, 3]
+#       
+#        Output:
+#            f : the frequency array
+#            sf: dynamical structure factor as a function of frequency and k
+#       
+#       """
+#    assert trj.shape[xyz_axis] == k.shape[1]
+#    rho = np.zeros([n_KP,n_Snp])
+#    for p in range(k.shape[0]):
+#        for j in range(trj.shape[time_axis]):
+#            print(p,j)
+#            for i in range(trj.shape[id_axis]):
+#                rho[p,j] += np.exp(sum(k[p,:]*trj[i,j,:])*1j)
+#    
+#    fft_rho = np.abs(fft(rho, axis = time_axis))**2.0
+#    full_faxis = np.fft.fftfreq(rho.shape[time_axis], dt)
+#    split_id = trj.shape[time_axis] // 2
+#    
+#    sf = fft_rho[:split_id]
+#    f = full_faxis[:split_id]
+#    
+#    return(f,sf)
     
 
-def HF_fft(trj, vel, k, St, E, J_i, dt=1):
-#    J_i = np.zeros([n_atoms,n_Snp,3]) #per atom heat flux
+def HF(trj, vel, k, St, E, J_i, dt=1):
+
     J = np.zeros([n_KP,n_Snp,3])*1j #total heat flux
     HF = np.zeros([n_KP,n_Snp,3])*1j #Total Heat Flux after FFT
-    
-    #creating heat flux per atom
-#    for i in range(n_atoms):
-#        for j in range(n_Snp):
-#            J_i[i,j,0] = E[i,j]*vel[i,j,0] + St[i,j,0]*vel[i,j,0] +\
-#                        St[i,j,3]*vel[i,j,1] + St[i,j,4]*vel[i,j,2]
-#            
-#            J_i[i,j,1] = E[i,j]*vel[i,j,0] + St[i,j,3]*vel[i,j,0] +\
-#                        St[i,j,1]*vel[i,j,1] + St[i,j,5]*vel[i,j,2]
-#            
-#            J_i[i,j,0] = E[i,j]*vel[i,j,0] + St[i,j,4]*vel[i,j,0] +\
-#                        St[i,j,5]*vel[i,j,1] + St[i,j,2]*vel[i,j,2]
-    
     
     for p in range(n_KP):
         k_rep = np.tile(k[p,:],(n_atoms,1))
         for j in range(n_Snp):
-            print(p,j)
             exponent = np.sum(np.multiply(k_rep,trj_sys[:,0,:]),axis=1)*1j
             
             J[p,j,0] = np.sum(np.multiply(J_i[:,j,0],np.exp(exponent)),axis=0)
             J[p,j,1] = np.sum(np.multiply(J_i[:,j,1],np.exp(exponent)),axis=0)
-            J[p,j,1] = np.sum(np.multiply(J_i[:,j,1],np.exp(exponent)),axis=0)
-        
-    
-    
-    
-    #creating the total heat flux
-#    for p in range(n_KP):
-#        for j in range(n_Snp):
-#            print(p,j)
-#            for i in range(n_atoms):
-#                J[p,j,:] += J_i[i,j,:]*np.exp(k[p,:]*trj[i,j,:]*1j)
+            J[p,j,2] = np.sum(np.multiply(J_i[:,j,2],np.exp(exponent)),axis=0)
     
     fft_J = np.abs(fft(J, axis = time_axis))**2.0
     full_faxis = np.fft.fftfreq(J.shape[time_axis], dt)
@@ -230,35 +240,35 @@ def dot(a,b):
     c = a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
     return(c)
     
-def VACF(vel):
-    """This function takes the velocity of the system and returns the velocity
-       autocorrelation function (VACF).
-       
-       Input:
-           vel: a 3D numpy array [#atoms, #snapshots, 3]
-       
-       Output:
-           vacf = a 1D array [#snapshots]
-    
-    """
-    
-    #----------------------- Smoothening -------------------------#
-    t_damp = np.shape(vel)[1]*np.sqrt(3)
-    for j in range(0,np.shape(vel)[1]):
-        vel[:,j,:] = vel[:,j,:]*np.exp(-(j/t_damp)**2)
-           
-    #-------------------------------------------------------------#
-    
-    vacf     = np.zeros(np.shape(vel)[1])
-    vacf_num = np.zeros(np.shape(vel)[1])
-    vacf_den = np.zeros(np.shape(vel)[1])
-    
-    for j in range(0,np.shape(vel)[1]): #np.shape(vel)[1] is the number of snapshots
-        for i in range(0,(np.shape(vel)[0]-1)): #np.shape(vel)[0] is the number of the atoms
-            vacf_num[j] =+ dot(vel[i,0,:],vel[i,j,:])
-            vacf_den[j] =+ dot(vel[i,0,:],vel[i,0,:])
-        vacf[j] = vacf_num[j]/vacf_den[j]
-    return(vacf)
+#def VACF(vel):
+#    """This function takes the velocity of the system and returns the velocity
+#       autocorrelation function (VACF).
+#       
+#       Input:
+#           vel: a 3D numpy array [#atoms, #snapshots, 3]
+#       
+#       Output:
+#           vacf = a 1D array [#snapshots]
+#    
+#    """
+#    
+#    #----------------------- Smoothening -------------------------#
+#    t_damp = np.shape(vel)[1]*np.sqrt(3)
+#    for j in range(0,np.shape(vel)[1]):
+#        vel[:,j,:] = vel[:,j,:]*np.exp(-(j/t_damp)**2)
+#           
+#    #-------------------------------------------------------------#
+#    
+#    vacf     = np.zeros(np.shape(vel)[1])
+#    vacf_num = np.zeros(np.shape(vel)[1])
+#    vacf_den = np.zeros(np.shape(vel)[1])
+#    
+#    for j in range(0,np.shape(vel)[1]): #np.shape(vel)[1] is the number of snapshots
+#        for i in range(0,(np.shape(vel)[0]-1)): #np.shape(vel)[0] is the number of the atoms
+#            vacf_num[j] =+ dot(vel[i,0,:],vel[i,j,:])
+#            vacf_den[j] =+ dot(vel[i,0,:],vel[i,0,:])
+#        vacf[j] = vacf_num[j]/vacf_den[j]
+#    return(vacf)
 
 
 
@@ -286,7 +296,7 @@ if __name__ == '__main__':
     #####################################################################
     
 #    datadir = "C:\\Users\\mf4yc\\Desktop\\Amorphous Silicon\\SiH\\DumpFiles\\c-Si"
-    datadir = "C:\\Users\\mf4yc\\Desktop\\Silicon\\a-Si\\0.1ns_dump"
+    datadir = "C:\\Users\\mf4yc\\Desktop\\Silicon\\c-Si\\0.1ns_dump"
 #    filepath = datadir
 #    file = open(filepath,'r')
     file_list = glob.glob(os.path.join(os.getcwd(), datadir, "*.dump"))
@@ -337,19 +347,19 @@ if __name__ == '__main__':
         
         vel_sys[:,j,:] = pd.concat([mySystem['vx'],mySystem['vy'],mySystem['vz']],axis=1)
         trj_sys[:,j,:] = pd.concat([mySystem['x'],mySystem['y'],mySystem['z']],axis=1)
-        Str_sys[:,j,:] = pd.concat([mySystem['s1'],mySystem['s2'],\
-                                   mySystem['s3'],mySystem['s4'],\
-                                   mySystem['s5'],mySystem['s6']],axis=1)
+#        Str_sys[:,j,:] = pd.concat([mySystem['s1'],mySystem['s2'],\
+#                                   mySystem['s3'],mySystem['s4'],\
+#                                   mySystem['s5'],mySystem['s6']],axis=1)
         TotE_sys[:,j] = mySystem['ke'] + mySystem['pe']
         
-        J_i[:,j,0] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,0]*vel_sys[:,j,0] +\
-                    Str_sys[:,j,3]*vel_sys[:,j,1] + Str_sys[:,j,4]*vel_sys[:,j,2]
-            
-        J_i[:,j,1] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,3]*vel_sys[:,j,0] +\
-                    Str_sys[:,j,1]*vel_sys[:,j,1] + Str_sys[:,j,5]*vel_sys[:,j,2]
-            
-        J_i[:,j,0] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,4]*vel_sys[:,j,0] +\
-                    Str_sys[:,j,5]*vel_sys[:,j,1] + Str_sys[:,j,2]*vel_sys[:,j,2]
+#        J_i[:,j,0] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,0]*vel_sys[:,j,0] +\
+#                    Str_sys[:,j,3]*vel_sys[:,j,1] + Str_sys[:,j,4]*vel_sys[:,j,2]
+#            
+#        J_i[:,j,1] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,3]*vel_sys[:,j,0] +\
+#                    Str_sys[:,j,1]*vel_sys[:,j,1] + Str_sys[:,j,5]*vel_sys[:,j,2]
+#            
+#        J_i[:,j,0] = TotE_sys[:,j]*vel_sys[:,j,0] + Str_sys[:,j,4]*vel_sys[:,j,0] +\
+#                    Str_sys[:,j,5]*vel_sys[:,j,1] + Str_sys[:,j,2]*vel_sys[:,j,2]
         
 #        vel_H[:,j,:] = pd.concat([Hydrogens["vx"],Hydrogens["vy"],Hydrogens["vz"]],axis=1)
 #        vel_Si[:,j,:] = pd.concat([Silicons["vx"],Silicons["vy"],Silicons["vz"]],axis=1)
@@ -376,10 +386,10 @@ if __name__ == '__main__':
 #        Vel_Si[:,0,j] = Silicons["vx"]
 #        Vel_Si[:,1,j] = Silicons["vy"]
 #        Vel_Si[:,2,j] = Silicons["vz"]
-        
-        mySystem["V"] = np.sqrt(np.power(mySystem["vx"],2) +\
-                                np.power(mySystem["vy"],2) +\
-                                np.power(mySystem["vz"],2))
+#        
+#        mySystem["V"] = np.sqrt(np.power(mySystem["vx"],2) +\
+#                                np.power(mySystem["vy"],2) +\
+#                                np.power(mySystem["vz"],2))
 #        Hydrogens["V"] = np.sqrt(Hydrogens["vx"]^2+Hydrogens["vy"]^2+Hydrogens["vz"]^2)
 #        Silicons["V"] = np.sqrt(Silicons["vx"]^2+Silicons["vy"]^2+Silicons["vz"]^2)
         
@@ -423,6 +433,7 @@ if __name__ == '__main__':
 #    #Plotting DOS
 #    #plt.plot(w[100:900],ph_dos[100:900])
 #    vacf_sys = VACF(vel_sys)
+    
     
 #    vel = np.zeros([vel_sys.shape[1],vel_sys.shape[0],vel_sys.shape[2]])
 #    for i in range(vel_sys.shape[0]):
